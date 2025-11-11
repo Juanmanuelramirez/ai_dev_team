@@ -10,7 +10,7 @@
   "dependencies": {
     "@langchain/core": "^0.2.16",
     "@langchain/google-genai": "^0.0.22",
-    "@langchain/langgraph": "^0.0.72",
+    "@langchain/langgraph": "^0.2.0",
     "cors": "^2.8.5",
     "express": "^4.19.2",
     "googleapis": "^140.0.1"
