@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title data-i18n-key="metaTitle">Interfaz del Equipo AI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- NUEVAS LIBRERÍAS: JSZip para crear .zip y FileSaver para descargar -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.0/FileSaver.min.js"></script>
+    
+    <link rel="stylesheet" href="/styles/main.css">
+</head>
+<body class="bg-gray-900 text-gray-100 flex flex-col h-screen">
+
+    <!-- Header -->
+    <header class.="bg-gray-800 shadow-lg z-20">
+        <div class="container mx-auto max-w-7xl p-4 flex justify-between items-center">
+            <div>
+                <h1 class="text-2xl font-bold text-white" data-i18n-key="title">Equipo de Desarrollo AI</h1>
+                <p class="text-sm text-indigo-300" data-i18n-key="subtitle">Interfaz para el proyecto multi-agente.</p>
+            </div>
+            <!-- Spinner -->
+            <div id="spinner" class="hidden flex items-center space-x-2">
+                <svg class="animate-spin h-5 w-5 text-indigo-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span class="text-sm text-gray-300" data-i18n-key="statusWorking">El equipo está trabajando...</span>
+            </div>
+            <!-- Botón de Descarga Global -->
+            <button id="download-zip-button" onclick="downloadProjectAsZip()" class="hidden bg-blue-600 text-white py-2 px-4 rounded-md font-semibold hover:bg-blue-700 transition duration-300 disabled:bg-blue-800">
+                <span data-i18n-key="buttonDownloadZip">Descargar Proyecto (.zip)</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- NUEVO LAYOUT DE 3 COLUMNAS -->
+    <div class="flex-grow container mx-auto max-w-7xl p-4 overflow-hidden flex flex-row space-x-4">
+        
+        <!-- Columna 1: Explorador de Archivos -->
+        <aside class="w-1/4 bg-gray-800 rounded-lg p-4 overflow-y-auto">
+            <h2 class="text-lg font-semibold text-white mb-3" data-i18n-key="fileExplorerTitle">Explorador de Archivos</h2>
+            <div id="file-explorer" class="text-sm">
+                <p class="text-gray-400 italic" data-i18n-key="fileExplorerEmpty">Aún no se han creado archivos.</p>
+            </div>
+        </aside>
+
+        <!-- Columna 2: Log de Agentes -->
+        <main id="log-container" class="w-1/2 bg-gray-800 rounded-lg p-4 overflow-y-auto shadow-inner">
+            <!-- Los mensajes del log se insertarán aquí -->
+            <div class="flex justify-center">
+                <div class="bg-gray-900 text-gray-400 text-sm p-3 rounded-lg italic" data-i18n-key="waitingForProject">
+                    Esperando inicio del proyecto...
+                </div>
+            </div>
+        </main>
+
+        <!-- Columna 3: Visor de Código -->
+        <aside class="w-1/4 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden flex flex-col">
+            <div class="p-3 bg-gray-800 border-b border-gray-700">
+                <h2 class="text-lg font-semibold text-white" data-i18n-key="codeViewerTitle">Visor de Código</h2>
+                <p id="current-file-path" class="text-sm text-indigo-300 truncate">Selecciona un archivo para verlo</p>
+            </div>
+            <pre id="code-viewer" class="flex-grow p-4 overflow-auto text-sm text-gray-300"><code></code></pre>
+            <button id="download-file-button" onclick="downloadCurrentFile()" class="hidden bg-green-600 text-white py-2 px-4 m-4 rounded-md font-semibold hover:bg-green-700 transition duration-300">
+                <span data-i18n-key="buttonDownloadFile">Descargar Archivo</span>
+            </button>
+        </aside>
+
+    </div>
+
+    <!-- Footer con Controles (Ahora ocupa el ancho completo) -->
+    <footer class="bg-gray-800 shadow-inner p-4 z-10 sticky bottom-0">
+        <div class="container mx-auto max-w-7xl">
+            <!-- ... (Contenedores 'human-input-container', 'start-container', 'finished-message' sin cambios de layout) ... -->
+             <!-- Contenedor de Respuesta Humana (se muestra cuando es necesario) -->
+             <div id="human-input-container" class="hidden mb-4">
+                <div class="bg-yellow-900 border border-yellow-700 text-yellow-100 p-4 rounded-lg">
+                    <h3 id="human-question" class="text-lg font-semibold mb-2" data-i18n-key="waitingForHuman">El equipo necesita tu ayuda:</h3>
+                    <p id="human-question-text" class="text-sm mb-4 bg-gray-900 p-3 rounded-md"></p>
+                    <textarea id="human-response-input" class="w-full p-3 bg-gray-700 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500" rows="2" data-i18n-key="placeholderRespond"></textarea>
+                    <button id="respond-button" onclick="sendResponse()" class="mt-2 w-full bg-green-600 text-white py-2 px-4 rounded-md font-semibold hover:bg-green-700 transition duration-300 disabled:bg-green-800">
+                        <span data-i18n-key="buttonRespond">Enviar Respuesta</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Contenedor de Inicio (se oculta después de iniciar) -->
+            <div id="start-container">
+                <textarea id="prompt-input" class="w-full p-3 bg-gray-700 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500" rows="2" data-i18n-key="placeholderStart"></textarea>
+                <button id="start-button" onclick="startRun()" class="mt-2 w-full bg-indigo-600 text-white py-3 px-6 rounded-md font-semibold hover:bg-indigo-700 transition duration-300 disabled:bg-indigo-800">
+                    <span data-i18n-key="buttonStart">Iniciar Equipo</span>
+                </button>
+            </div>
+
+            <!-- Mensaje de Finalización (se muestra al final) -->
+            <div id="finished-message" class="hidden text-center p-4 bg-green-900 text-green-200 rounded-md">
+                <p class="font-semibold text-lg" data-i18n-key="finishedTitle">¡Proyecto Terminado!</p>
+                <p data-i18n-key="finishedSubtitle">El equipo ha completado todas las tareas.</p>
+                <button onclick="resetUI()" class="mt-2 text-sm text-indigo-300 hover:underline" data-i18n-key="buttonNewProject">Empezar nuevo proyecto</button>
+            </div>
+        </div>
+    </footer>
+
+    <!-- SVGs para Iconos (Log) -->
+    <div id="svg-icons" class="hidden">
+        <!-- ... (iconos de agente, humano, herramienta sin cambios) ... -->
+        <svg id="icon-agent" xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m-2 6h-2M12 8a4 4 0 11-8 0 4 4 0 018 0zM12 16a4 4 0 11-8 0 4 4 0 018 0zM16 12a4 4 0 110-8 4 4 0 010 8z" />
+        </svg>
+        <svg id="icon-human" xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+        </svg>
+        <svg id="icon-tool" xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+        </svg>
+    </div>
+    
+    <!-- SVGs para Explorador de Archivos -->
+    <div id="file-tree-icons" class="hidden">
+        <!-- Icono de Carpeta -->
+        <svg id="icon-folder" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+        </svg>
+        <!-- Icono de Archivo -->
+        <svg id="icon-file" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+        </svg>
+    </div>
+
+    <script src="/js/app.js"></script>
+</body>
+</html>

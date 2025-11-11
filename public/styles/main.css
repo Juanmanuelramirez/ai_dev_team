@@ -1,0 +1,69 @@
+/* Tipografía base */
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+}
+
+/* Ocultar scrollbar pero permitir scroll (Log y Visor de Código) */
+#log-container,
+#code-viewer,
+#file-explorer {
+    scroll-behavior: smooth;
+    -ms-overflow-style: none; /* IE and Edge */
+    scrollbar-width: none; /* Firefox */
+}
+#log-container::-webkit-scrollbar,
+#code-viewer::-webkit-scrollbar,
+#file-explorer::-webkit-scrollbar {
+    width: 0;
+    background: transparent;
+}
+
+/* Estilos del Explorador de Archivos */
+#file-explorer ul {
+    padding-left: 1rem; /* Indentación para sub-carpetas */
+    border-left: 1px solid theme('colors.gray.700');
+    margin-left: 0.5rem;
+}
+
+#file-explorer li {
+    list-style: none;
+    margin-top: 0.25rem;
+}
+
+.file-tree-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: theme('borderRadius.md');
+    cursor: pointer;
+    color: theme('colors.gray.300');
+}
+
+.file-tree-item:hover {
+    background-color: theme('colors.gray.700');
+}
+
+.file-tree-item.file-item:hover {
+    color: theme('colors.white');
+}
+
+.file-tree-item.active-file {
+    background-color: theme('colors.indigo.600');
+    color: theme('colors.white');
+}
+
+.file-tree-item .icon-folder {
+    color: theme('colors.indigo.400');
+}
+
+.file-tree-item .icon-file {
+    color: theme('colors.gray.400');
+}
+
+/* Estilos del Visor de Código */
+#code-viewer {
+    background-color: theme('colors.gray.900');
+    white-space: pre-wrap; /* Mantiene el formato y ajusta líneas */
+    word-wrap: break-word;
+}
