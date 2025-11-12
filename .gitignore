@@ -1,0 +1,14 @@
+##Ignorar dependencias de Node
+
+node_modules/
+
+##Ignorar el archivo de variables de entorno
+
+##¡IMPORTANTE! Este archivo contiene tus claves secretas de API
+
+.env
+
+##Logs y archivos del sistema
+
+*.log
+.DS_Store
