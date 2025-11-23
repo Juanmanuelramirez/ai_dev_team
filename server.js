@@ -230,6 +230,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 expressApp.use(express.static(path.join(__dirname, 'public')));
 
+// --- FIX DE LUCAS: Manejo de Favicon ---
+expressApp.get('/favicon.ico', (req, res) => res.status(204).end());
+
 expressApp.post('/start_run', async (req, res) => {
     const { prompt } = req.body;
     if (!prompt) return res.status(400).json({ error: "Falta el prompt" });

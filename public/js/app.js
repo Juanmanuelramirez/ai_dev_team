@@ -1,5 +1,8 @@
-// URL del Backend Node.js
-const API_URL = "http://127.0.0.1:8000";
+// --- CORRECCIÓN LUCAS (Tech Lead) ---
+// Error anterior: const API_URL = "http://127.0.0.1:8000";
+// Causa: Esto obligaba al navegador a buscar el backend en la PC del usuario, fallando en AWS.
+// Solución: Usar ruta relativa ("") o "/" para que use el dominio actual automáticamente.
+const API_URL = ""; 
         
 let translations = {};
 let currentLang = "en";
@@ -33,7 +36,6 @@ const downloadFileButton = document.getElementById('download-file-button');
 
 // --- Internacionalización (i18n) ---
 async function loadTranslations() {
-    // ... (sin cambios)
     try {
         const response = await fetch('/data/translations.json');
         if (!response.ok) {
@@ -50,7 +52,6 @@ async function loadTranslations() {
 }
 
 function setLanguage() {
-    // ... (sin cambios)
     const browserLang = navigator.language || navigator.userLanguage;
     if (browserLang.startsWith('es') && translations.es) {
         currentLang = 'es';
@@ -73,12 +74,9 @@ function setLanguage() {
         }
     });
 }
-// --- Fin de i18n ---
-
 
 // --- Funciones de Iconos (Log) ---
 function getIcon(sender) {
-    // ... (sin cambios)
     let iconId, colorClass;
     if (sender.toLowerCase().includes('humano')) {
         iconId = 'icon-human';
@@ -144,7 +142,7 @@ function resetUI() {
     lastLogCount = 0;
 }
 
-// --- NUEVA LÓGICA DEL EXPLORADOR DE ARCHIVOS ---
+// --- LÓGICA DEL EXPLORADOR DE ARCHIVOS ---
 
 function getFileTreeIcon(isFolder) {
     const iconId = isFolder ? 'icon-folder' : 'icon-file';
@@ -214,19 +212,15 @@ function renderFileExplorer() {
 function showFileContent(path) {
     currentFile = path;
     const content = projectFiles[path];
-    
-    // Usar textContent para evitar problemas de XSS y renderizar el contenido tal cual
     codeViewer.textContent = content; 
-    
     currentFilePath.textContent = path;
     downloadFileButton.classList.remove('hidden');
     
-    // Actualizar la clase activa
     document.querySelectorAll('.file-tree-item.active-file').forEach(el => el.classList.remove('active-file'));
     document.querySelector(`.file-tree-item[onclick="showFileContent('${path}')"]`).classList.add('active-file');
 }
 
-// --- NUEVA LÓGICA DE DESCARGA ---
+// --- LÓGICA DE DESCARGA ---
 
 function downloadCurrentFile() {
     if (!currentFile) return;
@@ -234,32 +228,28 @@ function downloadCurrentFile() {
     const filename = currentFile.split('/').pop();
     
     const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
-    saveAs(blob, filename); // De FileSaver.js
+    saveAs(blob, filename); 
 }
 
 async function downloadProjectAsZip() {
     if (Object.keys(projectFiles).length === 0) return;
     
     const zip = new JSZip();
-    
-    // Añadir todos los archivos al zip
     Object.keys(projectFiles).forEach(path => {
         zip.file(path, projectFiles[path]);
     });
 
-    // Generar el zip y descargarlo
     try {
         const content = await zip.generateAsync({ type: "blob" });
-        saveAs(content, "proyecto_agentes_ai.zip"); // De FileSaver.js
+        saveAs(content, "proyecto_agentes_ai.zip"); 
     } catch (error) {
         console.error("Error al crear el zip:", error);
     }
 }
 
-// --- Lógica de Log y API (Modificada) ---
+// --- Lógica de Log y API ---
 
 function addLogMessage(message, sender, isError = false) {
-    // ... (sin cambios)
     const div = document.createElement('div');
     div.classList.add('flex', 'items-start', 'space-x-3', 'mb-4');
 
@@ -301,26 +291,20 @@ function updateLog(logEntries) {
                 message = parts[1].trim();
             }
             
-            // --- ¡NUEVA LÓGICA DE INTERCEPCIÓN! ---
             if (sender.toLowerCase() === 'herramienta (file_write)') {
                 try {
                     const fileData = JSON.parse(message);
                     if (fileData.status === "file_created") {
-                        // ¡Archivo capturado!
                         projectFiles[fileData.path] = fileData.content;
-                        // Actualizar el explorador de archivos
                         renderFileExplorer();
-                        // Mostrar un log más amigable
                         message = `Archivo escrito en ${fileData.path} (${fileData.content.length} bytes)`;
                     } else {
                         message = `Error al escribir archivo: ${fileData.message}`;
                     }
                 } catch (e) {
-                    // El mensaje no era JSON, mostrarlo tal cual
-                    // (Esto no debería pasar si el backend funciona bien)
+                    // Fallback
                 }
             }
-            // ------------------------------------
 
             addLogMessage(message, sender);
         });
@@ -328,9 +312,8 @@ function updateLog(logEntries) {
     }
 }
 
-// --- Lógica de API (Sin cambios) ---
+// --- Funciones de API ---
 async function startRun() {
-    // ... (sin cambios)
     const prompt = promptInput.value;
     if (!prompt) {
         alert(i18n.alertEmptyPrompt);
@@ -344,6 +327,7 @@ async function startRun() {
     startContainer.classList.add('hidden');
 
     try {
+        // CORRECCIÓN LUCAS: API_URL ahora es relativo, funcionará en producción.
         const response = await fetch(`${API_URL}/start_run`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -364,13 +348,11 @@ async function startRun() {
 }
 
 function startPolling() {
-    // ... (sin cambios)
     stopPolling();
     pollingInterval = setInterval(pollStatus, 2000);
 }
 
 function stopPolling() {
-    // ... (sin cambios)
     if (pollingInterval) {
         clearInterval(pollingInterval);
         pollingInterval = null;
@@ -378,7 +360,6 @@ function stopPolling() {
 }
 
 async function pollStatus() {
-    // ... (sin cambios)
     if (!currentThreadId) return;
 
     try {
@@ -386,7 +367,6 @@ async function pollStatus() {
         if (!response.ok) throw new Error(i18n.errorGetStatus);
 
         const state = await response.json();
-        
         updateLog(state.log || []);
 
         if (state.status === "waiting_for_human") {
@@ -410,7 +390,6 @@ async function pollStatus() {
 }
 
 async function sendResponse() {
-    // ... (sin cambios)
     const responseText = humanResponseInput.value;
     if (!responseText) {
         alert(i18n.alertEmptyResponse);
@@ -448,14 +427,12 @@ async function sendResponse() {
     }
 }
         
-// --- Inicialización ---
 document.addEventListener('DOMContentLoaded', async () => {
     await loadTranslations();
     setLanguage();
     addLogMessage(i18n.waitingForProject, 'Sistema');
 });
 
-// Asignar funciones al scope global para que onclick las vea
 window.startRun = startRun;
 window.sendResponse = sendResponse;
 window.resetUI = resetUI;
