@@ -104,13 +104,14 @@ const googleSearchTool = tool(async ({ query }) => {
 const allTools = [fileWriteTool, fileReadTool, runTerminalCommandTool, googleSearchTool];
 
 // ---------------------------------
-// 2. Definición del Modelo Gemini (CAMBIO CRÍTICO: Opción Segura)
+// 2. Definición del Modelo Gemini (SINCRONIZADO CON TU OTRO REPO)
 // ---------------------------------
+// LUCAS: Usamos el modelo EXACTO que funciona en tu proyecto 'agenticai_job'.
+const MODEL_NAME = "gemini-2.5-flash-preview-09-2025"; 
+
 const model = new ChatGoogleGenerativeAI({
     apiKey: GEMINI_API_KEY,
-    // LUCAS: Cambiamos a "gemini-pro". Este es el modelo base estable 1.0.
-    // Si este falla, es un problema de la API Key, no del nombre del modelo.
-    model: "gemini-pro", 
+    model: MODEL_NAME, 
     temperature: 0.7,
 });
 
@@ -274,4 +275,5 @@ expressApp.post('/respond', (req, res) => {
 
 expressApp.listen(port, '0.0.0.0', () => {
     console.log(`--- Server running on port ${port} ---`);
+    console.log(`--- USANDO MODELO: ${MODEL_NAME} ---`); // Verifica este log al iniciar
 });
