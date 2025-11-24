@@ -12,18 +12,14 @@ import { HumanMessage, AIMessage, SystemMessage, ToolMessage } from '@langchain/
 import { google } from 'googleapis'; 
 
 // ---------------------------------
-// --- Configuración de API Keys (MEJORADA) ---
+// --- Configuración de API Keys ---
 // ---------------------------------
-// Lucas (Tech Lead): Se priorizan las variables de entorno para despliegue seguro.
-// Si no existen, se usan los valores por defecto (útil para local, pero riesgoso para prod).
-
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "TU_GEMINI_API_KEY"; 
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || "TU_GOOGLE_API_KEY"; 
 const GOOGLE_CSE_ID = process.env.GOOGLE_CSE_ID || "TU_GOOGLE_CSE_ID";
 
-// Validación no bloqueante: Solo avisa si faltan las keys, pero no rompe el build step del despliegue
 if (!process.env.GEMINI_API_KEY && GEMINI_API_KEY === "TU_GEMINI_API_KEY") {
-    console.warn("⚠️ ADVERTENCIA: GEMINI_API_KEY no configurada. El agente no podrá responder hasta que se configure la variable de entorno.");
+    console.warn("⚠️ ADVERTENCIA: GEMINI_API_KEY no configurada.");
 }
 
 const customsearch = google.customsearch("v1");
@@ -32,11 +28,8 @@ const customsearch = google.customsearch("v1");
 // 1. Definición de Herramientas (Tools)
 // ---------------------------------
 
-// Herramienta para escribir archivos
 const fileWriteTool = tool(async ({ file_path, content }) => {
     try {
-        // Lucas: En producción (ej. AWS/Render), 'proyecto_generado' es efímero. 
-        // Se recomienda persistencia real (S3/Database) para versiones futuras.
         const fullPath = path.join(__dirname, 'proyecto_generado', file_path);
         await fs.mkdir(path.dirname(fullPath), { recursive: true });
         await fs.writeFile(fullPath, content, 'utf-8');
@@ -62,7 +55,6 @@ const fileWriteTool = tool(async ({ file_path, content }) => {
     },
 });
 
-// Herramienta de lectura (Placeholder)
 const fileReadTool = tool(async ({ file_path }) => {
     return JSON.stringify({ status: "error", message: "Lectura no implementada." });
 }, {
@@ -71,7 +63,6 @@ const fileReadTool = tool(async ({ file_path }) => {
     schema: { type: "object", properties: { file_path: { type: "string" } } },
 });
 
-// Herramienta de terminal (Placeholder)
 const runTerminalCommandTool = tool(async ({ command }) => {
     return JSON.stringify({ status: "error", message: "Terminal deshabilitada por seguridad." });
 }, {
@@ -80,7 +71,6 @@ const runTerminalCommandTool = tool(async ({ command }) => {
     schema: { type: "object", properties: { command: { type: "string" } } },
 });
 
-// Herramienta de Búsqueda de Google
 const googleSearchTool = tool(async ({ query }) => {
     try {
         if (!process.env.GOOGLE_API_KEY && GOOGLE_API_KEY === "TU_GOOGLE_API_KEY") {
@@ -114,11 +104,12 @@ const googleSearchTool = tool(async ({ query }) => {
 const allTools = [fileWriteTool, fileReadTool, runTerminalCommandTool, googleSearchTool];
 
 // ---------------------------------
-// 2. Definición del Modelo Gemini
+// 2. Definición del Modelo Gemini (CORREGIDO)
 // ---------------------------------
 const model = new ChatGoogleGenerativeAI({
     apiKey: GEMINI_API_KEY,
-    model: "gemini-1.5-flash-latest", // Lucas: Flash es más rápido y barato para iteraciones
+    // LUCAS: Cambio de "gemini-1.5-flash-latest" a "gemini-1.5-flash" para corregir error 404
+    model: "gemini-1.5-flash", 
     temperature: 0.7,
 });
 
@@ -136,7 +127,7 @@ const appState = {
 };
 
 // ---------------------------------
-// 4. Prompts (Optimizados)
+// 4. Prompts
 // ---------------------------------
 
 const PM_PROMPT = `Eres el Project Manager. Define objetivos, stack y características para el Arquitecto. Sé conciso.`;
@@ -152,7 +143,7 @@ const createAgentNode = (rolePrompt, tools) => async (state) => {
     const systemMessage = new SystemMessage(rolePrompt);
     const modelWithTools = model.bindTools(tools);
     const aiResponse = await modelWithTools.invoke([systemMessage, ...messages]);
-    const logEntry = `**${rolePrompt.split('.')[0].replace('Eres el ', '')}**: ${aiResponse.content}`; // Log más limpio
+    const logEntry = `**${rolePrompt.split('.')[0].replace('Eres el ', '')}**: ${aiResponse.content}`; 
     return { messages: [aiResponse], log: [logEntry] };
 };
 
@@ -191,7 +182,7 @@ const routeWork = (state) => {
 };
 
 // ---------------------------------
-// 6. Workflow Construction
+// 6. Workflow
 // ---------------------------------
 
 const workflow = new StateGraph({ channels: appState });
@@ -220,7 +211,6 @@ const app = workflow.compile();
 // ---------------------------------
 
 const expressApp = express();
-// Lucas: Usamos el puerto del entorno (necesario para Render/AWS) o 8000 por defecto
 const port = process.env.PORT || 8000;
 
 expressApp.use(cors());
@@ -230,7 +220,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 expressApp.use(express.static(path.join(__dirname, 'public')));
 
-// --- FIX DE LUCAS: Manejo de Favicon ---
 expressApp.get('/favicon.ico', (req, res) => res.status(204).end());
 
 expressApp.post('/start_run', async (req, res) => {
@@ -251,7 +240,8 @@ expressApp.post('/start_run', async (req, res) => {
         } catch (e) {
             console.error(e);
             const current = globalState.get(thread_id);
-            globalState.set(thread_id, { ...current, status: "error", log: [...(current?.log || []), `ERROR: ${e.message}`] });
+            // Lucas: Añadido log detallado al estado para que el frontend lo muestre
+            globalState.set(thread_id, { ...current, status: "error", log: [...(current?.log || []), `ERROR CRÍTICO: ${e.message}`] });
         }
     })();
     res.json({ thread_id });
@@ -276,7 +266,7 @@ expressApp.post('/respond', (req, res) => {
             globalState.set(thread_id, { ...finalState, status: "finished", log: [...finalState.log, "**Sistema**: Fin."] });
         } catch (e) {
             const current = globalState.get(thread_id);
-            globalState.set(thread_id, { ...current, status: "error", log: [...(current?.log || []), `ERROR: ${e.message}`] });
+            globalState.set(thread_id, { ...current, status: "error", log: [...(current?.log || []), `ERROR CRÍTICO: ${e.message}`] });
         }
     })();
     res.json({ status: "resumed" });
