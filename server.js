@@ -104,14 +104,13 @@ const googleSearchTool = tool(async ({ query }) => {
 const allTools = [fileWriteTool, fileReadTool, runTerminalCommandTool, googleSearchTool];
 
 // ---------------------------------
-// 2. Definición del Modelo Gemini (CORREGIDO A ESTABLE)
+// 2. Definición del Modelo Gemini (CORRECCIÓN)
 // ---------------------------------
+// LUCAS: Si "gemini-1.5-flash-001" falla, volvemos al alias base "gemini-1.5-flash"
+// Si esto también falla, cambia la línea de abajo a 'model: "gemini-pro"'
 const model = new ChatGoogleGenerativeAI({
     apiKey: GEMINI_API_KEY,
-    // LUCAS: Usamos "gemini-1.5-flash-001". 
-    // Esta es la versión "Stable Build" garantizada. Los alias genéricos como "flash" o "latest" 
-    // pueden fallar en v1beta dependiendo de la región o actualizaciones de Google.
-    model: "gemini-1.5-flash-001", 
+    model: "gemini-1.5-flash", 
     temperature: 0.7,
 });
 
