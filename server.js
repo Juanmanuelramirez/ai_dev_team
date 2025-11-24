@@ -104,12 +104,14 @@ const googleSearchTool = tool(async ({ query }) => {
 const allTools = [fileWriteTool, fileReadTool, runTerminalCommandTool, googleSearchTool];
 
 // ---------------------------------
-// 2. Definición del Modelo Gemini (CORREGIDO)
+// 2. Definición del Modelo Gemini (CORREGIDO A ESTABLE)
 // ---------------------------------
 const model = new ChatGoogleGenerativeAI({
     apiKey: GEMINI_API_KEY,
-    // LUCAS: Cambio de "gemini-1.5-flash-latest" a "gemini-1.5-flash" para corregir error 404
-    model: "gemini-1.5-flash", 
+    // LUCAS: Usamos "gemini-1.5-flash-001". 
+    // Esta es la versión "Stable Build" garantizada. Los alias genéricos como "flash" o "latest" 
+    // pueden fallar en v1beta dependiendo de la región o actualizaciones de Google.
+    model: "gemini-1.5-flash-001", 
     temperature: 0.7,
 });
 
@@ -240,7 +242,6 @@ expressApp.post('/start_run', async (req, res) => {
         } catch (e) {
             console.error(e);
             const current = globalState.get(thread_id);
-            // Lucas: Añadido log detallado al estado para que el frontend lo muestre
             globalState.set(thread_id, { ...current, status: "error", log: [...(current?.log || []), `ERROR CRÍTICO: ${e.message}`] });
         }
     })();
