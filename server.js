@@ -403,9 +403,33 @@ expressApp.get('/get_status/:thread_id', (req, res) => {
 });
 
 expressApp.post('/respond', (req, res) => {
+    // --- DEBUGGING: Ver qué llega ---
+    console.log("Solicitud recibida en /respond:", req.body);
+
     const { thread_id, response } = req.body;
+    
+    if (!thread_id) {
+        console.error("Error: Faltan thread_id en el cuerpo de la solicitud");
+        return res.status(400).json({ error: "thread_id is required" });
+    }
+    if (!response) {
+        console.error("Error: Faltan response en el cuerpo de la solicitud");
+        return res.status(400).json({ error: "response is required" });
+    }
+
     const currentState = globalFrontendState.get(thread_id);
-    if (!currentState || currentState.status !== "waiting_for_human") return res.status(400).json({ error: "Invalid state" });
+    
+    // Si no existe el estado, puede que se haya reiniciado el servidor
+    if (!currentState) {
+        console.error(`Error: Thread ID ${thread_id} no encontrado en memoria`);
+        return res.status(404).json({ error: "Thread expired or server restarted. Please reload." });
+    }
+
+    if (currentState.status !== "waiting_for_human") {
+        console.warn(`Advertencia: Recibida respuesta para thread ${thread_id} pero el estado es ${currentState.status}`);
+        // A veces permitimos responder igual si hubo un error de UI
+        // return res.status(400).json({ error: "Invalid state" }); 
+    }
 
     currentState.status = "running";
     currentState.log.push(`**Humano**: ${response}`);

@@ -105,7 +105,10 @@ function setStatusLoading() {
 
 function setStatusError() {
     spinner.classList.add('hidden');
-    startContainer.classList.remove('hidden');
+    // NO mostramos el startContainer si ya estábamos en medio de una conversación
+    // startContainer.classList.remove('hidden'); 
+    
+    // Habilitamos controles si es necesario, pero mejor dejar que el usuario vea el error
     startButton.disabled = false;
     promptInput.disabled = false;
 }
@@ -134,6 +137,7 @@ function resetUI() {
     startButton.disabled = false;
     promptInput.disabled = false;
     finishedMessage.classList.add('hidden');
+    humanInputContainer.classList.add('hidden'); // Asegurar que se oculte
     
     logContainer.innerHTML = '';
     addLogMessage(i18n.waitingForProject || "Esperando...", 'Sistema');
@@ -378,8 +382,13 @@ async function sendResponse() {
         if (data.status === "resumed") startPolling();
         else throw new Error(data.message);
     } catch (error) {
+        // AQUI ESTABA EL PROBLEMA: Antes solo mostraba el error pero dejaba la UI muerta
         addLogMessage(`Error: ${error.message}`, 'Sistema', true);
-        setStatusHumanInput("Error de envío. Intenta de nuevo.");
+        
+        // SOLUCIÓN: Restaurar el estado "waiting_for_human" para permitir reintentar
+        // Recuperamos la última pregunta del texto visible
+        const lastQuestion = document.getElementById('human-question-text').innerText;
+        setStatusHumanInput(lastQuestion || "Error de envío. Intenta de nuevo.");
     }
 }
         
