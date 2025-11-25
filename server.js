@@ -7,7 +7,8 @@ import fs from 'fs/promises';
 // --- Imports de LangChain y Google ---
 import { tool } from '@langchain/core/tools';
 import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
-import { StateGraph, END } from '@langchain/langgraph';
+// IMPORTANTE: Añadimos MemorySaver para recordar la conversación
+import { StateGraph, END, MemorySaver } from '@langchain/langgraph';
 import { HumanMessage, AIMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import { google } from 'googleapis'; 
 
@@ -34,7 +35,6 @@ const fileWriteTool = tool(async ({ file_path, content }) => {
         await fs.mkdir(path.dirname(fullPath), { recursive: true });
         await fs.writeFile(fullPath, content, 'utf-8');
         
-        // Retornar JSON string para que el frontend lo parsee
         return JSON.stringify({
             status: "file_created",
             path: file_path, 
@@ -119,49 +119,52 @@ const model = new ChatGoogleGenerativeAI({
 // 3. Estado y Grafo (LangGraph)
 // ---------------------------------
 
-const globalState = new Map();
+// Memoria en RAM para guardar el estado de la conversación entre turnos
+const checkpointer = new MemorySaver();
+
+// Estado Global para el Frontend (Logs visuales)
+const globalFrontendState = new Map();
 
 const appState = {
     messages: { value: (a, b) => a.concat(b), default: () => [] },
+    // 'log' y 'status' son auxiliares para pasar info al frontend
     log: { value: (a, b) => a.concat(b), default: () => [] },
     status: { value: (a, b) => b, default: () => "running" },
     question: { value: (a, b) => b, default: () => "" }
 };
 
 // ---------------------------------
-// 4. Prompts (MEJORADOS: Identidad y Pausas)
+// 4. Prompts (ESTRICTOS)
 // ---------------------------------
 
 const PM_PROMPT = `Eres "Sofía", la Project Manager.
-Tu objetivo es coordinar el proyecto y asegurar que el usuario esté feliz con la tecnología.
 
-**TU PRIMER PASO ES OBLIGATORIO:**
-1.  Lee la solicitud del usuario.
-2.  **NO ASUMAS NADA**. Aunque el usuario diga "HTML", debes confirmar el enfoque.
-3.  Propón un "Stack Tecnológico" recomendado y una breve lista de funcionalidades.
-4.  Pregunta explícitamente: "¿Te parece bien este plan o prefieres otra tecnología?".
-5.  Usa el formato: "CLARIFICATION_NEEDED: [Tu propuesta y pregunta]".
+**REGLA 1: CLARIFICACIÓN OBLIGATORIA**
+Si es la primera vez que hablas con el usuario:
+1. NO inicies el proyecto aún.
+2. Saluda y propón un "Stack Tecnológico" basado en su idea.
+3. Pregunta: "¿Te parece bien este stack o prefieres cambiar algo?".
+4. Responde con: "CLARIFICATION_NEEDED: [Tu propuesta y pregunta]".
 
-**SOLO CUANDO EL USUARIO CONFIRME:**
-1.  Crea el archivo 'documentacion/requerimientos.md'.
-2.  Pasa el turno al Arquitecto.`;
+**REGLA 2: GESTIÓN DE CAMBIOS**
+Si el usuario pide un cambio (ej. "Hazlo mobile", "Cambia el color"):
+1. Confirma el cambio.
+2. Actualiza el archivo 'documentacion/requerimientos.md'.
+3. Pasa el turno al Arquitecto.
+
+**REGLA 3: FORMATO**
+Sé breve y profesional.`;
 
 const ARCHITECT_PROMPT = `Eres "Mateo", el Arquitecto.
-Recibes los requerimientos confirmados de Sofía.
-
-**TUS TAREAS:**
-1.  Define la estructura de carpetas y archivos.
-2.  Crea el archivo 'documentacion/arquitectura.md' usando 'file_write'.
-3.  Pasa el turno al Desarrollador con instrucciones precisas.`;
+1. Lee los requerimientos.
+2. Actualiza/Crea 'documentacion/arquitectura.md' con la estructura de archivos.
+3. Pasa el turno al Desarrollador.`;
 
 const DEVELOPER_PROMPT = `Eres "Lucas", el Desarrollador.
-Recibes el plan técnico.
-
-**TUS TAREAS:**
-1.  Escribe el código real usando 'file_write'.
-2.  Implementa todos los archivos necesarios (HTML, CSS, JS).
-3.  Cuando termines una versión funcional, **DETENTE** y pide feedback.
-4.  Responde: "PROJECT_COMPLETED: He desplegado la versión v1. ¿Quieres probarla o cambiar algo?".`;
+1. Lee la arquitectura.
+2. Escribe/Actualiza el código usando 'file_write'.
+3. Crea TODOS los archivos necesarios.
+4. Al finalizar, responde SIEMPRE: "PROJECT_COMPLETED: He aplicado los cambios. ¿Qué más necesitas?".`;
 
 // ---------------------------------
 // 5. Nodos
@@ -177,12 +180,13 @@ const createAgentNode = (rolePrompt, tools) => async (state) => {
     const agentNameMatch = rolePrompt.match(/"([^"]+)"/);
     const agentName = agentNameMatch ? agentNameMatch[1] : "Agente";
 
-    // --- SANITIZACIÓN VISUAL ---
-    // Si el mensaje es solo uso de herramientas (tool_calls), no lo mostramos como texto.
-    // El nodo de herramientas se encargará de mostrar "Archivo creado..."
+    // --- LIMPIEZA DE LOGS ---
     let logEntries = [];
-    if (aiResponse.content && typeof aiResponse.content === 'string' && aiResponse.content.trim().length > 0) {
-        logEntries.push(`**${agentName}**: ${aiResponse.content}`);
+    const content = aiResponse.content;
+
+    // Solo mostramos texto real. Si el agente solo usa herramientas, NO mostramos nada aquí.
+    if (content && typeof content === 'string' && content.trim().length > 0) {
+        logEntries.push(`**${agentName}**: ${content}`);
     }
     
     return { messages: [aiResponse], log: logEntries };
@@ -209,11 +213,11 @@ const loggingToolNode = async (state) => {
             output = JSON.stringify({ error: e.message });
         }
         
-        // Solo mostramos logs visuales si es file_write (para el Canvas)
-        // Ocultamos google_search y otros para no saturar
+        // SOLO mostramos logs visuales si se crea un archivo
         if (toolCall.name === 'file_write') {
              logEntries.push(`**Herramienta (${toolCall.name})**: ${output}`);
         }
+        // Ocultamos google_search y otros para limpieza
 
         toolMessages.push(new ToolMessage(output, toolCall.id));
     }
@@ -227,10 +231,10 @@ const humanInputNode = (state) => {
         .replace("PROJECT_COMPLETED:", "")
         .trim();
         
-    // Este nodo solo prepara el estado para la UI, el log visual ya lo puso el agente antes
     return { 
         status: "waiting_for_human", 
         question: question
+        // No añadimos log aquí porque ya lo hizo el agente
     };
 };
 
@@ -238,6 +242,7 @@ const routeWork = (state) => {
     const lastMessage = state.messages[state.messages.length - 1];
     if (lastMessage.tool_calls?.length) return "tools";
     
+    // Puntos de parada para interacción humana
     if (lastMessage.content.includes("CLARIFICATION_NEEDED")) return "clarify";
     if (lastMessage.content.includes("PROJECT_COMPLETED")) return "review";
     
@@ -261,30 +266,27 @@ workflow.setEntryPoint("pm");
 workflow.addEdge("pm", "architect");
 workflow.addEdge("architect", "developer");
 
-// Rutas del Developer
+// Rutas condicionales
 workflow.addConditionalEdges("developer", routeWork, {
     "tools": "tool_node",
-    "clarify": "human_node", // Loop de feedback
-    "review": "human_node",  // Loop de feedback final
+    "clarify": "human_node",
+    "review": "human_node", 
     "end": END,
     "continue": END
 });
 
-// Retorno de herramientas
 workflow.addConditionalEdges("tool_node", (state) => {
     const lastToolMsg = state.messages[state.messages.length - 1];
     const content = lastToolMsg.content; 
-    
+    // Routing inteligente según el archivo tocado
     if (content.includes("requerimientos.md")) return "architect";
     if (content.includes("arquitectura.md")) return "developer";
-    
     return "developer"; 
 }, {
     "architect": "architect",
     "developer": "developer"
 });
 
-// Rutas del PM
 workflow.addConditionalEdges("pm", (state) => {
     const last = state.messages[state.messages.length - 1];
     if (last.tool_calls?.length) return "tools_pm"; 
@@ -296,7 +298,6 @@ workflow.addConditionalEdges("pm", (state) => {
     "architect": "architect"
 });
 
-// Rutas del Arquitecto
 workflow.addConditionalEdges("architect", (state) => {
     const last = state.messages[state.messages.length - 1];
     if (last.tool_calls?.length) return "tools_arch";
@@ -306,12 +307,13 @@ workflow.addConditionalEdges("architect", (state) => {
     "developer": "developer"
 });
 
-// --- CAMBIO CRÍTICO: DETENER LA EJECUCIÓN ---
-// Cuando llegamos al nodo humano, terminamos este "turno" de ejecución.
-// Esto permite que el servidor espere la respuesta real del usuario.
+// --- PUNTO CRÍTICO ---
+// El nodo humano lleva a END para detener la ejecución y esperar al usuario.
+// El estado se guarda gracias al 'checkpointer'.
 workflow.addEdge("human_node", END); 
 
-const app = workflow.compile();
+// Compilación CON MEMORIA
+const app = workflow.compile({ checkpointer });
 
 // ---------------------------------
 // 7. Backend Express
@@ -329,42 +331,47 @@ expressApp.use(express.static(path.join(__dirname, 'public')));
 
 expressApp.get('/favicon.ico', (req, res) => res.status(204).end());
 
-// Función para correr el grafo paso a paso y hacer streaming al estado global
+// Función de ejecución (Stream)
 async function runAgentProcess(thread_id, inputConfig) {
     try {
+        // Configurable: thread_id es la clave de la memoria
+        const config = { configurable: { thread_id } };
+        
         const stream = await app.stream(inputConfig, { 
-            configurable: { thread_id },
+            ...config,
             streamMode: "updates"
         });
 
         for await (const chunk of stream) {
             const nodeName = Object.keys(chunk)[0];
             const update = chunk[nodeName];
-            const currentState = globalState.get(thread_id) || {};
+            
+            // Actualizar estado frontend
+            const currentFrontendState = globalFrontendState.get(thread_id) || {};
 
-            // Acumular logs
+            // Logs acumulativos
             if (update.log && Array.isArray(update.log)) {
-                const existingLogs = currentState.log || [];
-                currentState.log = [...existingLogs, ...update.log];
+                const existingLogs = currentFrontendState.log || [];
+                currentFrontendState.log = [...existingLogs, ...update.log];
             }
             
-            // Actualizar estado
+            // Estado de la UI
             if (update.status) {
-                currentState.status = update.status;
-                if (update.question) currentState.question = update.question;
+                currentFrontendState.status = update.status;
+                if (update.question) currentFrontendState.question = update.question;
             } else {
-                currentState.status = "running";
+                currentFrontendState.status = "running";
             }
 
-            globalState.set(thread_id, currentState);
+            globalFrontendState.set(thread_id, currentFrontendState);
         }
 
     } catch (e) {
         console.error("Error en stream:", e);
-        const currentState = globalState.get(thread_id) || {};
-        currentState.status = "error";
-        currentState.log = [...(currentState.log || []), `**Error Crítico**: ${e.message}`];
-        globalState.set(thread_id, currentState);
+        const currentFrontendState = globalFrontendState.get(thread_id) || {};
+        currentFrontendState.status = "error";
+        currentFrontendState.log = [...(currentFrontendState.log || []), `**Error Crítico**: ${e.message}`];
+        globalFrontendState.set(thread_id, currentFrontendState);
     }
 }
 
@@ -373,19 +380,23 @@ expressApp.post('/start_run', async (req, res) => {
     if (!prompt) return res.status(400).json({ error: "Falta el prompt" });
 
     const thread_id = `thread_${Date.now()}`;
-    const initialState = {
-        messages: [new HumanMessage(prompt)],
-        log: [`**Sistema**: Conectando con Sofía (PM)...`]
+    const initialLog = {
+        log: [`**Sistema**: Conectando con Sofía (PM)...`],
+        status: "running"
     };
     
-    globalState.set(thread_id, { ...initialState, status: "running" });
-    runAgentProcess(thread_id, initialState);
+    globalFrontendState.set(thread_id, initialLog);
+
+    // Iniciamos con el mensaje del usuario
+    runAgentProcess(thread_id, { messages: [new HumanMessage(prompt)] });
+
     res.json({ thread_id });
 });
 
 expressApp.get('/get_status/:thread_id', (req, res) => {
-    const state = globalState.get(req.params.thread_id);
+    const state = globalFrontendState.get(req.params.thread_id);
     if (state && state.log) {
+        // Deduplicar logs visuales
         state.log = [...new Set(state.log)];
     }
     state ? res.json(state) : res.status(404).json({ error: "Not found" });
@@ -393,20 +404,21 @@ expressApp.get('/get_status/:thread_id', (req, res) => {
 
 expressApp.post('/respond', (req, res) => {
     const { thread_id, response } = req.body;
-    const currentState = globalState.get(thread_id);
+    const currentState = globalFrontendState.get(thread_id);
     if (!currentState || currentState.status !== "waiting_for_human") return res.status(400).json({ error: "Invalid state" });
 
     currentState.status = "running";
     currentState.log.push(`**Humano**: ${response}`);
-    globalState.set(thread_id, currentState);
+    globalFrontendState.set(thread_id, currentState);
     
-    // Reanudamos el proceso inyectando la respuesta del humano
-    // LangGraph sabrá a quién entregársela porque el estado se preservó
+    // Reanudamos con el mensaje del usuario. 
+    // Gracias al MemorySaver (checkpointer), LangGraph sabe en qué nodo se quedó.
     runAgentProcess(thread_id, { messages: [new HumanMessage(response)] });
+    
     res.json({ status: "resumed" });
 });
 
 expressApp.listen(port, '0.0.0.0', () => {
     console.log(`--- Server running on port ${port} ---`);
-    console.log(`--- MODE: Interactive Streaming | MODEL: ${MODEL_NAME} ---`);
+    console.log(`--- MEMORY ENABLED | MODEL: ${MODEL_NAME} ---`);
 });
