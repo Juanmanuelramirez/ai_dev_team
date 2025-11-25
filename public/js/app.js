@@ -1,4 +1,6 @@
-// --- URL RELATIVA PARA PRODUCCIÓN (IMPORTANTE) ---
+// --- CONFIGURACIÓN DE CONEXIÓN ---
+// IMPORTANTE: Dejar vacío "" para que use el mismo dominio/puerto del origen.
+// Esto funciona tanto en local (localhost:8000) como en AWS/Render.
 const API_URL = ""; 
         
 let translations = {};
@@ -68,17 +70,25 @@ function setLanguage() {
 // --- Funciones Visuales ---
 function getIcon(sender) {
     let iconId, colorClass;
-    if (sender.toLowerCase().includes('humano')) {
+    // Normalizamos el sender para detectar roles
+    const senderLower = sender.toLowerCase();
+    
+    if (senderLower.includes('humano')) {
         iconId = 'icon-human';
         colorClass = 'text-green-400';
-    } else if (sender.toLowerCase().includes('herramienta')) {
+    } else if (senderLower.includes('herramienta')) {
         iconId = 'icon-tool';
         colorClass = 'text-cyan-400';
     } else {
+        // Agentes (Sofía, Mateo, Lucas, etc.)
         iconId = 'icon-agent';
         colorClass = 'text-indigo-400';
     }
-    const svg = document.getElementById(iconId).cloneNode(true);
+    
+    const originalSvg = document.getElementById(iconId);
+    if (!originalSvg) return ""; // Fallback si no carga el SVG
+    
+    const svg = originalSvg.cloneNode(true);
     svg.setAttribute('id', '');
     svg.classList.add(colorClass);
     return svg.outerHTML;
@@ -88,12 +98,12 @@ function setStatusLoading() {
     spinner.classList.remove('hidden');
     humanInputContainer.classList.add('hidden');
     finishedMessage.classList.add('hidden');
+    startContainer.classList.add('hidden'); // Ocultar input inicial
     startButton.disabled = true;
     promptInput.disabled = true;
 }
 
 function setStatusError() {
-    // Lucas: Nuevo estado para errores. No borra el log, solo restaura controles.
     spinner.classList.add('hidden');
     startContainer.classList.remove('hidden');
     startButton.disabled = false;
@@ -119,7 +129,6 @@ function setStatusFinished() {
 }
 
 function resetUI() {
-    // Lucas: Corregido para ocultar spinner si estaba activo
     spinner.classList.add('hidden'); 
     startContainer.classList.remove('hidden');
     startButton.disabled = false;
@@ -127,7 +136,7 @@ function resetUI() {
     finishedMessage.classList.add('hidden');
     
     logContainer.innerHTML = '';
-    addLogMessage(i18n.waitingForProject || "Esperando...", 'system');
+    addLogMessage(i18n.waitingForProject || "Esperando...", 'Sistema');
     
     projectFiles = {};
     currentFile = null;
@@ -224,7 +233,11 @@ async function downloadProjectAsZip() {
 function addLogMessage(message, sender, isError = false) {
     const div = document.createElement('div');
     div.classList.add('flex', 'items-start', 'space-x-3', 'mb-4');
-    let contentHTML = message.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
+    
+    // Formateo básico de Markdown para negritas y saltos de línea
+    let contentHTML = message
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\n/g, '<br>');
     
     if (isError) contentHTML = `<span class="text-red-400 font-bold">⚠️ ${contentHTML}</span>`;
     else if (sender.toLowerCase().includes('herramienta')) contentHTML = `<span class="text-cyan-200 text-sm">${contentHTML}</span>`;
@@ -243,23 +256,37 @@ function addLogMessage(message, sender, isError = false) {
 
 function updateLog(logEntries) {
     if (logEntries.length > lastLogCount) {
-        logEntries.slice(lastLogCount).forEach(entry => {
+        const newEntries = logEntries.slice(lastLogCount);
+        
+        newEntries.forEach(entry => {
+            // Parsear mensaje "Sender: Contenido"
             const parts = entry.split(/:\s(.*)/s);
-            let sender = "Sistema", message = entry;
-            if (parts.length > 1) { sender = parts[0].replace(/\*/g, ''); message = parts[1].trim(); }
+            let sender = "Sistema";
+            let message = entry;
             
-            if (sender.toLowerCase() === 'herramienta (file_write)') {
+            if (parts.length > 1) { 
+                sender = parts[0].replace(/\*/g, ''); // Quitar asteriscos
+                message = parts[1].trim(); 
+            }
+            
+            // Interceptar creación de archivos para el Canvas
+            if (sender.toLowerCase().includes('herramienta') && message.includes('file_created')) {
                 try {
                     const fd = JSON.parse(message);
                     if (fd.status === "file_created") {
                         projectFiles[fd.path] = fd.content;
                         renderFileExplorer();
-                        message = `Archivo escrito en ${fd.path}`;
-                    } else message = `Error archivo: ${fd.message}`;
-                } catch (e) {}
+                        // Reemplazar el JSON feo con un mensaje bonito para el usuario
+                        message = `Archivo creado: <strong>${fd.path}</strong>`;
+                    } 
+                } catch (e) {
+                    // Si falla el parseo, mostramos el mensaje original
+                }
             }
+            
             addLogMessage(message, sender);
         });
+        
         lastLogCount = logEntries.length;
     }
 }
@@ -274,8 +301,6 @@ async function startRun() {
     lastLogCount = 1;
     
     setStatusLoading();
-    // Lucas: Ocultamos el input explícitamente al iniciar
-    startContainer.classList.add('hidden');
 
     try {
         const response = await fetch(`${API_URL}/start_run`, {
@@ -292,9 +317,8 @@ async function startRun() {
 
     } catch (error) {
         console.error("Error startRun:", error);
-        // Lucas: NO llamamos a resetUI() aquí, para que el usuario pueda leer el error.
-        addLogMessage(`Error de conexión: ${error.message}. Verifica que el backend esté corriendo.`, 'Sistema', true);
-        setStatusError(); // Restauramos controles pero mantenemos el log de error
+        addLogMessage(`Error de conexión: ${error.message}. Verifica el backend.`, 'Sistema', true);
+        setStatusError();
     }
 }
 
@@ -305,30 +329,42 @@ async function pollStatus() {
     if (!currentThreadId) return;
     try {
         const response = await fetch(`${API_URL}/get_status/${currentThreadId}`);
-        if (!response.ok) throw new Error("Error polling status");
+        if (!response.ok) {
+            // Si es 404, puede que el hilo no esté listo aún, ignoramos una vez
+            if (response.status === 404) return;
+            throw new Error("Error polling status");
+        }
         const state = await response.json();
         updateLog(state.log || []);
         
         if (state.status === "waiting_for_human") setStatusHumanInput(state.question);
         else if (state.status === "finished") setStatusFinished();
         else if (state.status === "error") {
-            addLogMessage(`Error Agente: ${state.log[state.log.length-1]}`, 'Sistema', true);
+            // Mostramos el último error del log
+            const errorMsg = state.log && state.log.length > 0 ? state.log[state.log.length-1] : "Error desconocido";
+            if (!errorMsg.includes("Error Crítico")) { // Evitar duplicar si ya está en el log
+                 addLogMessage(`Proceso detenido: ${errorMsg}`, 'Sistema', true);
+            }
             setStatusError();
             stopPolling();
         } 
     } catch (error) {
         console.error("Error pollStatus:", error);
-        // Si el polling falla una vez, no matamos todo, solo logueamos. Si falla mucho, el usuario lo verá.
     }
 }
 
 async function sendResponse() {
     const responseText = humanResponseInput.value;
     if (!responseText) return;
+    
     document.getElementById('respond-button').disabled = true;
-    setStatusLoading();
+    // No borramos el log, solo añadimos la respuesta
     addLogMessage(responseText, "Humano (Respuesta)");
     humanResponseInput.value = '';
+    
+    // Volvemos a estado de carga (spinner)
+    spinner.classList.remove('hidden');
+    humanInputContainer.classList.add('hidden');
 
     try {
         const response = await fetch(`${API_URL}/respond`, {
@@ -337,12 +373,13 @@ async function sendResponse() {
             body: JSON.stringify({ thread_id: currentThreadId, response: responseText })
         });
         if (!response.ok) throw new Error("Error enviando respuesta");
+        
         const data = await response.json();
         if (data.status === "resumed") startPolling();
         else throw new Error(data.message);
     } catch (error) {
         addLogMessage(`Error: ${error.message}`, 'Sistema', true);
-        setStatusHumanInput("Error. Reintenta.");
+        setStatusHumanInput("Error de envío. Intenta de nuevo.");
     }
 }
         
