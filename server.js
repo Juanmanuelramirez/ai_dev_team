@@ -34,7 +34,7 @@ const fileWriteTool = tool(async ({ file_path, content }) => {
         await fs.mkdir(path.dirname(fullPath), { recursive: true });
         await fs.writeFile(fullPath, content, 'utf-8');
         
-        // Importante: Retornar JSON string para que el frontend lo parsee y muestre en Canvas
+        // Retornar JSON string para que el frontend lo parsee y muestre en Canvas
         return JSON.stringify({
             status: "file_created",
             path: file_path, 
@@ -105,7 +105,7 @@ const googleSearchTool = tool(async ({ query }) => {
 const allTools = [fileWriteTool, fileReadTool, runTerminalCommandTool, googleSearchTool];
 
 // ---------------------------------
-// 2. Definición del Modelo (QUE SÍ FUNCIONA)
+// 2. Definición del Modelo
 // ---------------------------------
 const MODEL_NAME = "gemini-2.5-flash-preview-09-2025"; 
 
@@ -129,21 +129,21 @@ const appState = {
 };
 
 // ---------------------------------
-// 4. Prompts (MEJORADOS: Identidad, Archivos y Clarificación)
+// 4. Prompts (MEJORADOS: Identidad y Clarificación Estricta)
 // ---------------------------------
 
 const PM_PROMPT = `Eres "Sofía", la Project Manager.
-Tu objetivo es coordinar el proyecto.
+Tu objetivo es coordinar el proyecto y asegurar que los requerimientos sean sólidos.
 
-**FASE 1: CLARIFICACIÓN**
-1. Analiza la solicitud del usuario. ¿Es vaga? (Ej: "Haz una web", "Quiero un juego").
-2. Si es vaga, **DETENTE** y responde: "CLARIFICATION_NEEDED: [Pregunta para aclarar el alcance]".
-3. Si es clara, procede.
+**PROTOCOLO OBLIGATORIO DE CLARIFICACIÓN:**
+1. Al recibir una solicitud, evalúa su detalle.
+2. Si el usuario dice algo simple como "crea un juego" o "haz una web", **NO AVANCES**.
+3. Debes responder con: "CLARIFICATION_NEEDED: [Tu pregunta para definir alcance, tecnología o estilo]".
+4. Solo si el requerimiento tiene detalles técnicos y de negocio claros, procede a planificar.
 
-**FASE 2: PLANIFICACIÓN**
-1. Si el requerimiento es claro, define un plan.
-2. Crea un archivo 'documentacion/requerimientos.md' usando 'file_write' con el detalle.
-3. Pasa el turno al Arquitecto.`;
+**FASE DE PLANIFICACIÓN:**
+1. Crea 'documentacion/requerimientos.md' con 'file_write'.
+2. Pasa el turno al Arquitecto.`;
 
 const ARCHITECT_PROMPT = `Eres "Mateo", el Arquitecto.
 Recibes los requerimientos de Sofía.
@@ -159,7 +159,8 @@ Recibes el plan técnico.
 **TUS TAREAS:**
 1. Escribe el código real.
 2. Usa 'file_write' para crear CADA archivo (HTML, CSS, JS) necesario.
-3. Al terminar, responde "PROJECT_COMPLETED".`;
+3. Cuando termines, **NO** cierres el proyecto.
+4. Responde con "PROJECT_COMPLETED: He terminado la primera versión. ¿Deseas realizar alguna mejora o cambio?".`;
 
 // ---------------------------------
 // 5. Nodos
@@ -176,23 +177,24 @@ const createAgentNode = (rolePrompt, tools) => async (state) => {
     const agentNameMatch = rolePrompt.match(/"([^"]+)"/);
     const agentName = agentNameMatch ? agentNameMatch[1] : "Agente";
 
-    // --- SANITIZACIÓN ---
-    let cleanContent = aiResponse.content;
-    if (!cleanContent || typeof cleanContent !== 'string') {
-        if (aiResponse.tool_calls && aiResponse.tool_calls.length > 0) {
-            cleanContent = `*(Usando herramientas: ${aiResponse.tool_calls.map(t => t.name).join(', ')})*`;
-        } else {
-            cleanContent = "";
-        }
-    }
+    // --- SANITIZACIÓN DE LOGS ---
+    // Eliminamos logs de uso de herramientas para limpiar la interfaz visual
+    let logEntries = [];
+    let content = aiResponse.content;
 
-    const logEntry = `**${agentName}**: ${cleanContent}`;
-    return { messages: [aiResponse], log: [logEntry] };
+    // Si hay contenido de texto real, lo mostramos
+    if (content && typeof content === 'string' && content.trim().length > 0) {
+        logEntries.push(`**${agentName}**: ${content}`);
+    } 
+    // Si solo son llamadas a herramientas (tool_calls), NO generamos log de texto aquí.
+    // El log visual vendrá del nodo 'loggingToolNode' cuando la herramienta termine.
+    
+    return { messages: [aiResponse], log: logEntries };
 };
 
 const loggingToolNode = async (state) => {
     const lastMessage = state.messages[state.messages.length - 1];
-    if (!lastMessage.tool_calls?.length) return { log: ["**Sistema**: Error tools."] };
+    if (!lastMessage.tool_calls?.length) return { log: [] };
 
     const toolMessages = [];
     const logEntries = [];
@@ -211,12 +213,10 @@ const loggingToolNode = async (state) => {
             output = JSON.stringify({ error: e.message });
         }
         
-        // Formato JSON especial para que el frontend detecte archivos
-        // Si es file_write, el output YA ES un JSON string del tool.
+        // Si es file_write, el output es JSON para el Canvas.
         let logMsg = output;
         if (toolCall.name === 'file_write') {
-             // Hack: Le ponemos un prefijo para que el frontend lo vea fácil en el log
-             // Pero el 'output' real se guarda en messages para el agente
+             // Hack: Prefix para que el frontend lo detecte
              logMsg = output; 
         } else if (output.length > 200) {
             logMsg = output.substring(0, 200) + "...";
@@ -230,15 +230,27 @@ const loggingToolNode = async (state) => {
 
 const humanInputNode = (state) => {
     const lastMessage = state.messages[state.messages.length - 1];
-    const question = lastMessage.content.replace("CLARIFICATION_NEEDED:", "").trim();
-    return { status: "waiting_for_human", question: question, log: [`**Sofía**: ${question}`] };
+    // Limpiamos el marcador de protocolo interno antes de mostrar al usuario
+    const question = lastMessage.content
+        .replace("CLARIFICATION_NEEDED:", "")
+        .replace("PROJECT_COMPLETED:", "")
+        .trim();
+        
+    return { 
+        status: "waiting_for_human", 
+        question: question, 
+        log: [`**Sofía**: ${question}`] 
+    };
 };
 
 const routeWork = (state) => {
     const lastMessage = state.messages[state.messages.length - 1];
     if (lastMessage.tool_calls?.length) return "tools";
+    
+    // Ambos casos llevan al humano: Clarificación (inicio) o Validación (fin)
     if (lastMessage.content.includes("CLARIFICATION_NEEDED")) return "clarify";
-    if (lastMessage.content.includes("PROJECT_COMPLETED")) return "end";
+    if (lastMessage.content.includes("PROJECT_COMPLETED")) return "review";
+    
     return "continue";
 };
 
@@ -248,7 +260,6 @@ const routeWork = (state) => {
 
 const workflow = new StateGraph({ channels: appState });
 
-// Todos tienen acceso a escribir archivos
 workflow.addNode("pm", createAgentNode(PM_PROMPT, [fileWriteTool])); 
 workflow.addNode("architect", createAgentNode(ARCHITECT_PROMPT, [googleSearchTool, fileWriteTool]));
 workflow.addNode("developer", createAgentNode(DEVELOPER_PROMPT, [fileWriteTool, fileReadTool, runTerminalCommandTool]));
@@ -263,11 +274,11 @@ workflow.addEdge("architect", "developer");
 workflow.addConditionalEdges("developer", routeWork, {
     "tools": "tool_node",
     "clarify": "human_node",
+    "review": "human_node", // Ahora permite revisión en lugar de END
     "end": END,
     "continue": END
 });
 
-// Lógica simple de retorno de herramientas
 workflow.addConditionalEdges("tool_node", (state) => {
     const lastToolMsg = state.messages[state.messages.length - 1];
     const content = lastToolMsg.content; 
@@ -281,10 +292,9 @@ workflow.addConditionalEdges("tool_node", (state) => {
     "developer": "developer"
 });
 
-// Retorno del humano al PM
 workflow.addConditionalEdges("pm", (state) => {
     const last = state.messages[state.messages.length - 1];
-    if (last.tool_calls?.length) return "tools_pm"; // Si PM usa tools
+    if (last.tool_calls?.length) return "tools_pm"; 
     if (last.content.includes("CLARIFICATION_NEEDED")) return "clarify";
     return "architect";
 }, {
@@ -293,7 +303,6 @@ workflow.addConditionalEdges("pm", (state) => {
     "architect": "architect"
 });
 
-// Si Architect usa tools
 workflow.addConditionalEdges("architect", (state) => {
     const last = state.messages[state.messages.length - 1];
     if (last.tool_calls?.length) return "tools_arch";
@@ -303,6 +312,7 @@ workflow.addConditionalEdges("architect", (state) => {
     "developer": "developer"
 });
 
+// El input humano vuelve al PM para re-evaluar (ciclo de feedback)
 workflow.addEdge("human_node", "pm"); 
 
 const app = workflow.compile();
@@ -323,26 +333,42 @@ expressApp.use(express.static(path.join(__dirname, 'public')));
 
 expressApp.get('/favicon.ico', (req, res) => res.status(204).end());
 
-// --- FUNCIÓN CORE SIN STREAMING (MÁS SEGURA POR AHORA) ---
+// --- FUNCIÓN CORE CON STREAMING ITERATIVO ---
+// Esto soluciona la visualización en "tiempo real"
 async function runAgentProcess(thread_id, inputConfig) {
     try {
-        // Usamos invoke en lugar de stream para asegurar respuesta completa JSON
-        const finalState = await app.invoke(inputConfig, { configurable: { thread_id } });
-        
-        // Actualizamos el estado global con el resultado final
-        const currentState = globalState.get(thread_id) || {};
-        
-        // Fusionamos logs
-        const newLogs = finalState.log || [];
-        currentState.log = currentState.log ? [...currentState.log, ...newLogs] : newLogs;
-        
-        currentState.status = finalState.status === "waiting_for_human" ? "waiting_for_human" : "finished";
-        if (finalState.question) currentState.question = finalState.question;
-        
-        globalState.set(thread_id, currentState);
+        // Usamos stream para obtener actualizaciones paso a paso
+        const stream = await app.stream(inputConfig, { 
+            configurable: { thread_id },
+            streamMode: "updates"
+        });
+
+        for await (const chunk of stream) {
+            // Obtenemos el estado actual
+            const currentState = globalState.get(thread_id) || {};
+            const nodeName = Object.keys(chunk)[0];
+            const update = chunk[nodeName];
+
+            // Actualizamos logs incrementales
+            if (update.log && Array.isArray(update.log)) {
+                const existingLogs = currentState.log || [];
+                currentState.log = [...existingLogs, ...update.log];
+            }
+            
+            // Actualizamos estado
+            if (update.status) {
+                currentState.status = update.status;
+                if (update.question) currentState.question = update.question;
+            } else {
+                currentState.status = "running";
+            }
+
+            // GUARDAR EN TIEMPO REAL: Esto permite que el frontend (polling) vea el progreso
+            globalState.set(thread_id, currentState);
+        }
 
     } catch (e) {
-        console.error("Error en invoke:", e);
+        console.error("Error en stream:", e);
         const currentState = globalState.get(thread_id) || {};
         currentState.status = "error";
         currentState.log = [...(currentState.log || []), `**Error Crítico**: ${e.message}`];
@@ -357,12 +383,12 @@ expressApp.post('/start_run', async (req, res) => {
     const thread_id = `thread_${Date.now()}`;
     const initialState = {
         messages: [new HumanMessage(prompt)],
-        log: [`**Sistema**: Iniciando equipo...`]
+        log: [`**Sistema**: Conectando con el equipo...`]
     };
     
     globalState.set(thread_id, { ...initialState, status: "running" });
 
-    // Ejecutamos en background
+    // Ejecutamos en background sin await para liberar la request
     runAgentProcess(thread_id, initialState);
 
     res.json({ thread_id });
@@ -371,10 +397,8 @@ expressApp.post('/start_run', async (req, res) => {
 expressApp.get('/get_status/:thread_id', (req, res) => {
     const state = globalState.get(req.params.thread_id);
     
-    // Filtramos mensajes duplicados en el log para el frontend
+    // Limpieza básica de duplicados visuales
     if (state && state.log) {
-        // Hack simple para deduplicar logs si invoke retorna todo el historial
-        // En una app real, usaríamos IDs de mensaje.
         state.log = [...new Set(state.log)];
     }
 
@@ -389,11 +413,12 @@ expressApp.post('/respond', (req, res) => {
     currentState.status = "running";
     currentState.log.push(`**Humano**: ${response}`);
     
+    // Importante: Pasamos el mensaje como un objeto HumanMessage nuevo
     runAgentProcess(thread_id, { messages: [new HumanMessage(response)] });
     res.json({ status: "resumed" });
 });
 
 expressApp.listen(port, '0.0.0.0', () => {
     console.log(`--- Server running on port ${port} ---`);
-    console.log(`--- MODE: Standard Invoke | MODEL: ${MODEL_NAME} ---`);
+    console.log(`--- MODE: Step-by-Step Streaming | MODEL: ${MODEL_NAME} ---`);
 });
