@@ -134,7 +134,7 @@ const appState = {
 };
 
 // ---------------------------------
-// 4. Prompts (ESTRICTOS)
+// 4. Prompts (ESTRICTOS - FIX DE INTERACCIÓN)
 // ---------------------------------
 
 const PM_PROMPT = `Eres "Sofía", la Project Manager.
@@ -145,6 +145,7 @@ Si es la primera vez que hablas con el usuario:
 2. Saluda y propón un "Stack Tecnológico" basado en su idea.
 3. Pregunta: "¿Te parece bien este stack o prefieres cambiar algo?".
 4. Responde con: "CLARIFICATION_NEEDED: [Tu propuesta y pregunta]".
+5. **CRÍTICO: NO uses ninguna herramienta (como file_write) en este turno. Tu única tarea es preguntar.**
 
 **REGLA 2: GESTIÓN DE CAMBIOS**
 Si el usuario pide un cambio (ej. "Hazlo mobile", "Cambia el color"):
@@ -234,7 +235,6 @@ const humanInputNode = (state) => {
     return { 
         status: "waiting_for_human", 
         question: question
-        // No añadimos log aquí porque ya lo hizo el agente
     };
 };
 
@@ -287,10 +287,13 @@ workflow.addConditionalEdges("tool_node", (state) => {
     "developer": "developer"
 });
 
+// --- FIX DEL ROUTING DE PM ---
+// Damos prioridad a la clarificación sobre las herramientas.
+// Esto previene que el uso accidental de tools oculte la pregunta al usuario.
 workflow.addConditionalEdges("pm", (state) => {
     const last = state.messages[state.messages.length - 1];
+    if (last.content.includes("CLARIFICATION_NEEDED")) return "clarify"; // PRIORIDAD 1
     if (last.tool_calls?.length) return "tools_pm"; 
-    if (last.content.includes("CLARIFICATION_NEEDED")) return "clarify";
     return "architect";
 }, {
     "tools_pm": "tool_node",
@@ -307,9 +310,6 @@ workflow.addConditionalEdges("architect", (state) => {
     "developer": "developer"
 });
 
-// --- PUNTO CRÍTICO ---
-// El nodo humano lleva a END para detener la ejecución y esperar al usuario.
-// El estado se guarda gracias al 'checkpointer'.
 workflow.addEdge("human_node", END); 
 
 // Compilación CON MEMORIA
@@ -334,7 +334,6 @@ expressApp.get('/favicon.ico', (req, res) => res.status(204).end());
 // Función de ejecución (Stream)
 async function runAgentProcess(thread_id, inputConfig) {
     try {
-        // Configurable: thread_id es la clave de la memoria
         const config = { configurable: { thread_id } };
         
         const stream = await app.stream(inputConfig, { 
@@ -360,7 +359,11 @@ async function runAgentProcess(thread_id, inputConfig) {
                 currentFrontendState.status = update.status;
                 if (update.question) currentFrontendState.question = update.question;
             } else {
-                currentFrontendState.status = "running";
+                // IMPORTANTE: No sobrescribir "waiting_for_human" con "running" si el stream 
+                // sigue emitiendo pero ya estamos esperando.
+                if (currentFrontendState.status !== "waiting_for_human") {
+                    currentFrontendState.status = "running";
+                }
             }
 
             globalFrontendState.set(thread_id, currentFrontendState);
@@ -387,7 +390,6 @@ expressApp.post('/start_run', async (req, res) => {
     
     globalFrontendState.set(thread_id, initialLog);
 
-    // Iniciamos con el mensaje del usuario
     runAgentProcess(thread_id, { messages: [new HumanMessage(prompt)] });
 
     res.json({ thread_id });
@@ -396,47 +398,29 @@ expressApp.post('/start_run', async (req, res) => {
 expressApp.get('/get_status/:thread_id', (req, res) => {
     const state = globalFrontendState.get(req.params.thread_id);
     if (state && state.log) {
-        // Deduplicar logs visuales
         state.log = [...new Set(state.log)];
     }
     state ? res.json(state) : res.status(404).json({ error: "Not found" });
 });
 
 expressApp.post('/respond', (req, res) => {
-    // --- DEBUGGING: Ver qué llega ---
     console.log("Solicitud recibida en /respond:", req.body);
 
     const { thread_id, response } = req.body;
     
-    if (!thread_id) {
-        console.error("Error: Faltan thread_id en el cuerpo de la solicitud");
-        return res.status(400).json({ error: "thread_id is required" });
-    }
-    if (!response) {
-        console.error("Error: Faltan response en el cuerpo de la solicitud");
-        return res.status(400).json({ error: "response is required" });
-    }
+    if (!thread_id) return res.status(400).json({ error: "thread_id is required" });
+    if (!response) return res.status(400).json({ error: "response is required" });
 
     const currentState = globalFrontendState.get(thread_id);
     
-    // Si no existe el estado, puede que se haya reiniciado el servidor
     if (!currentState) {
-        console.error(`Error: Thread ID ${thread_id} no encontrado en memoria`);
         return res.status(404).json({ error: "Thread expired or server restarted. Please reload." });
-    }
-
-    if (currentState.status !== "waiting_for_human") {
-        console.warn(`Advertencia: Recibida respuesta para thread ${thread_id} pero el estado es ${currentState.status}`);
-        // A veces permitimos responder igual si hubo un error de UI
-        // return res.status(400).json({ error: "Invalid state" }); 
     }
 
     currentState.status = "running";
     currentState.log.push(`**Humano**: ${response}`);
     globalFrontendState.set(thread_id, currentState);
     
-    // Reanudamos con el mensaje del usuario. 
-    // Gracias al MemorySaver (checkpointer), LangGraph sabe en qué nodo se quedó.
     runAgentProcess(thread_id, { messages: [new HumanMessage(response)] });
     
     res.json({ status: "resumed" });
